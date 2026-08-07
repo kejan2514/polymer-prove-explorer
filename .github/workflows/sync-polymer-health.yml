@@ -20,6 +20,8 @@ jobs:
 
       - name: Fetch Polymer chain health
         shell: bash
+        env:
+          POLYMER_API_KEY: ${{ secrets.POLYMER_API_KEY }}
         run: |
           set -euo pipefail
           mkdir -p data
@@ -30,16 +32,27 @@ jobs:
             'https://api.polymer.zone/v1'
           )
 
+          AUTH_ARGS=()
+          if [[ -n "${POLYMER_API_KEY:-}" ]]; then
+            AUTH_ARGS=(-H "Authorization: Bearer ${POLYMER_API_KEY}")
+          fi
+
           SUCCESS=0
           for ENDPOINT in "${ENDPOINTS[@]}"; do
             echo "Requesting Polymer health from ${ENDPOINT}"
             HTTP_CODE=$(curl \
+              --http1.1 \
               --silent --show-error \
               --retry 3 --retry-delay 2 --retry-all-errors \
               --connect-timeout 15 --max-time 45 \
-              -A 'polymer-prove-explorer/1.0 (+https://github.com/kejan2514/polymer-prove-explorer)' \
+              -A 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/150 Safari/537.36' \
               -H 'Content-Type: application/json' \
-              -H 'Accept: application/json' \
+              -H 'Accept: application/json, text/plain, */*' \
+              -H 'Origin: https://dashboard.polymerlabs.org' \
+              -H 'Referer: https://dashboard.polymerlabs.org/' \
+              -H 'Sec-Fetch-Mode: cors' \
+              -H 'Sec-Fetch-Site: cross-site' \
+              "${AUTH_ARGS[@]}" \
               -X POST "${ENDPOINT}" \
               --data "${PAYLOAD}" \
               -o /tmp/polymer-health-raw.json \
@@ -69,6 +82,7 @@ jobs:
 
           if [[ "${SUCCESS}" != '1' ]]; then
             echo 'Polymer health API did not return a valid status map.'
+            echo 'If the endpoint now requires authentication, add POLYMER_API_KEY as a repository Actions secret.'
             exit 1
           fi
 
