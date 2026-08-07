@@ -1,0 +1,52 @@
+name: Sync Polymer Chain Health
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch Polymer chain health
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          RESPONSE=$(curl --fail --silent --show-error \
+            -X POST 'https://api.polymer.zone/v1' \
+            -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"info_health","params":[{}]}')
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          raw = json.loads(os.environ['RESPONSE'])
+          status = raw.get('result', {}).get('status', {})
+          if not isinstance(status, dict) or not status:
+              raise SystemExit('Polymer info_health returned no status map')
+          out = {
+              'updatedAt': datetime.now(timezone.utc).isoformat(),
+              'source': 'https://api.polymer.zone/v1 info_health',
+              'status': status,
+          }
+          with open('data/polymer-health.json', 'w', encoding='utf-8') as f:
+              json.dump(out, f, separators=(',', ':'))
+          PY
+        env:
+          RESPONSE: ${{ env.RESPONSE }}
+      - name: Commit snapshot if changed
+        run: |
+          if git diff --quiet -- data/polymer-health.json; then
+            echo 'No health changes.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/polymer-health.json
+          git commit -m 'data: refresh Polymer chain health'
+          git push
