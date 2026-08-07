@@ -18,14 +18,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p data
-          RESPONSE=$(curl --fail --silent --show-error \
+          curl --fail --silent --show-error \
             -X POST 'https://api.polymer.zone/v1' \
             -H 'Content-Type: application/json' \
-            --data '{"jsonrpc":"2.0","id":1,"method":"info_health","params":[{}]}')
+            --data '{"jsonrpc":"2.0","id":1,"method":"info_health","params":[{}]}' \
+            > /tmp/polymer-health-raw.json
           python3 - <<'PY'
-          import json, os
+          import json
           from datetime import datetime, timezone
-          raw = json.loads(os.environ['RESPONSE'])
+          with open('/tmp/polymer-health-raw.json', encoding='utf-8') as f:
+              raw = json.load(f)
           status = raw.get('result', {}).get('status', {})
           if not isinstance(status, dict) or not status:
               raise SystemExit('Polymer info_health returned no status map')
@@ -37,8 +39,6 @@ jobs:
           with open('data/polymer-health.json', 'w', encoding='utf-8') as f:
               json.dump(out, f, separators=(',', ':'))
           PY
-        env:
-          RESPONSE: ${{ env.RESPONSE }}
       - name: Commit snapshot if changed
         run: |
           if git diff --quiet -- data/polymer-health.json; then
