@@ -17,32 +17,79 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Fetch Polymer chain health
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p data
-          curl --fail --silent --show-error \
-            -X POST 'https://api.polymer.zone/v1' \
-            -H 'Content-Type: application/json' \
-            --data '{"jsonrpc":"2.0","id":1,"method":"info_health","params":[{}]}' \
-            > /tmp/polymer-health-raw.json
+
+          PAYLOAD='{"jsonrpc":"2.0","id":1,"method":"info_health","params":[{}]}'
+          ENDPOINTS=(
+            'https://api.polymer.zone/v1/'
+            'https://api.polymer.zone/v1'
+          )
+
+          SUCCESS=0
+          for ENDPOINT in "${ENDPOINTS[@]}"; do
+            echo "Requesting Polymer health from ${ENDPOINT}"
+            HTTP_CODE=$(curl \
+              --silent --show-error \
+              --retry 3 --retry-delay 2 --retry-all-errors \
+              --connect-timeout 15 --max-time 45 \
+              -A 'polymer-prove-explorer/1.0 (+https://github.com/kejan2514/polymer-prove-explorer)' \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json' \
+              -X POST "${ENDPOINT}" \
+              --data "${PAYLOAD}" \
+              -o /tmp/polymer-health-raw.json \
+              -w '%{http_code}')
+
+            echo "HTTP ${HTTP_CODE}"
+            if [[ "${HTTP_CODE}" =~ ^2 ]]; then
+              if python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('/tmp/polymer-health-raw.json')
+          raw = json.loads(p.read_text(encoding='utf-8'))
+          status = raw.get('result', {}).get('status', {})
+          if not isinstance(status, dict) or not status:
+              raise SystemExit(1)
+          PY
+              then
+                SUCCESS=1
+                break
+              fi
+            fi
+
+            echo 'Response body:'
+            cat /tmp/polymer-health-raw.json || true
+            echo
+          done
+
+          if [[ "${SUCCESS}" != '1' ]]; then
+            echo 'Polymer health API did not return a valid status map.'
+            exit 1
+          fi
+
           python3 - <<'PY'
           import json
           from datetime import datetime, timezone
+
           with open('/tmp/polymer-health-raw.json', encoding='utf-8') as f:
               raw = json.load(f)
-          status = raw.get('result', {}).get('status', {})
-          if not isinstance(status, dict) or not status:
-              raise SystemExit('Polymer info_health returned no status map')
+
+          status = raw['result']['status']
           out = {
               'updatedAt': datetime.now(timezone.utc).isoformat(),
-              'source': 'https://api.polymer.zone/v1 info_health',
+              'source': 'https://api.polymer.zone/v1/ info_health',
               'status': status,
           }
+
           with open('data/polymer-health.json', 'w', encoding='utf-8') as f:
               json.dump(out, f, separators=(',', ':'))
           PY
+
       - name: Commit snapshot if changed
         run: |
           if git diff --quiet -- data/polymer-health.json; then
